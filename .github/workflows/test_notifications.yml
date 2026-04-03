@@ -1,0 +1,30 @@
+name: Test Notifications
+
+on:
+  workflow_dispatch:   # Manual trigger only
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run test
+        env:
+          GMAIL_USER:      ${{ secrets.GMAIL_USER }}
+          GMAIL_PASSWORD:  ${{ secrets.GMAIL_PASSWORD }}
+          NOTIFY_EMAIL:    ${{ secrets.NOTIFY_EMAIL }}
+          TWILIO_SID:      ${{ secrets.TWILIO_SID }}
+          TWILIO_TOKEN:    ${{ secrets.TWILIO_TOKEN }}
+          TWILIO_FROM:     ${{ secrets.TWILIO_FROM }}
+          WHATSAPP_TO:     ${{ secrets.WHATSAPP_TO }}
+        run: python test_notifications.py
