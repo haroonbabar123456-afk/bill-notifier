@@ -1,0 +1,42 @@
+name: Pakistan Bill Checker
+
+on:
+  schedule:
+    - cron: "0 5 * * *"   # Runs every day at 10:00 AM PKT (5:00 AM UTC)
+  workflow_dispatch:        # Also allows manual trigger from GitHub UI
+
+jobs:
+  check-bills:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore bill state (cache)
+        uses: actions/cache@v4
+        with:
+          path: bill_state.json
+          key: bill-state-${{ runner.os }}
+          restore-keys: bill-state-
+
+      - name: Run bill checker
+        env:
+          GEPCO_REF_NO:    ${{ secrets.GEPCO_REF_NO }}
+          SNGPL_REF_NO:    ${{ secrets.SNGPL_REF_NO }}
+          GMAIL_USER:      ${{ secrets.GMAIL_USER }}
+          GMAIL_PASSWORD:  ${{ secrets.GMAIL_PASSWORD }}
+          NOTIFY_EMAIL:    ${{ secrets.NOTIFY_EMAIL }}
+          TWILIO_SID:      ${{ secrets.TWILIO_SID }}
+          TWILIO_TOKEN:    ${{ secrets.TWILIO_TOKEN }}
+          TWILIO_FROM:     ${{ secrets.TWILIO_FROM }}
+          WHATSAPP_TO:     ${{ secrets.WHATSAPP_TO }}
+        run: python check_bills.py
