@@ -9,24 +9,24 @@ from twilio.rest import Client
 from datetime import datetime
 
 # ─────────────────────────────────────────
-# CONFIGURATION — fill these in
+# CONFIGURATION
 # ─────────────────────────────────────────
-GEPCO_REF_NO = os.environ.get("GEPCO_REF_NO", "")        # Your 14-digit GEPCO reference number
-SNGPL_REF_NO = os.environ.get("SNGPL_REF_NO", "")        # Your SNGPL consumer number
+GEPCO_REF_NO = os.environ.get("GEPCO_REF_NO", "")
+SNGPL_REF_NO = os.environ.get("SNGPL_REF_NO", "")
 
-GMAIL_USER     = os.environ.get("GMAIL_USER", "")         # your Gmail address
-GMAIL_PASSWORD = os.environ.get("GMAIL_PASSWORD", "")     # Gmail App Password (not your real password)
-NOTIFY_EMAIL   = os.environ.get("NOTIFY_EMAIL", "")       # Where to send the email (can be same as above)
+GMAIL_USER     = os.environ.get("GMAIL_USER", "")
+GMAIL_PASSWORD = os.environ.get("GMAIL_PASSWORD", "")
+NOTIFY_EMAIL   = os.environ.get("NOTIFY_EMAIL", "")
 
 TWILIO_SID     = os.environ.get("TWILIO_SID", "")
 TWILIO_TOKEN   = os.environ.get("TWILIO_TOKEN", "")
-TWILIO_FROM    = os.environ.get("TWILIO_FROM", "")        # Twilio WhatsApp number e.g. whatsapp:+14155238886
-WHATSAPP_TO    = os.environ.get("WHATSAPP_TO", "")        # Your number e.g. whatsapp:+923001234567
+TWILIO_FROM    = os.environ.get("TWILIO_FROM", "")
+WHATSAPP_TO    = os.environ.get("WHATSAPP_TO", "")
 
 STATE_FILE = "bill_state.json"
 
 # ─────────────────────────────────────────
-# STATE MANAGEMENT (track seen bills)
+# STATE MANAGEMENT
 # ─────────────────────────────────────────
 def load_state():
     if os.path.exists(STATE_FILE):
@@ -39,26 +39,42 @@ def save_state(state):
         json.dump(state, f, indent=2)
 
 # ─────────────────────────────────────────
-# GEPCO BILL FETCHER
+# GEPCO BILL FETCHER (correct URL)
 # ─────────────────────────────────────────
 def check_gepco(ref_no):
-    """Fetch latest GEPCO bill info using their online portal."""
     try:
-        url = "https://bill.gepco.com.pk/bill.php"
-        payload = {"refno": ref_no}
+        url = f"https://bill.pitc.com.pk/gepcobill/general?refno={ref_no}"
         headers = {"User-Agent": "Mozilla/5.0"}
-        resp = requests.post(url, data=payload, headers=headers, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Extract bill amount and due date from the page
-        amount_tag = soup.find("td", string=lambda t: t and "Payable" in t)
-        due_tag    = soup.find("td", string=lambda t: t and "Due Date" in t)
+        print(f"[GEPCO] Page fetched, status: {resp.status_code}")
 
-        amount = amount_tag.find_next_sibling("td").text.strip() if amount_tag else "N/A"
-        due    = due_tag.find_next_sibling("td").text.strip()    if due_tag    else "N/A"
+        amount = "N/A"
+        due    = "N/A"
+        bill_month = "N/A"
 
-        # Use due date as unique bill identifier
-        return {"amount": amount, "due_date": due, "source": "GEPCO"}
+        all_tds = soup.find_all("td")
+        for i, td in enumerate(all_tds):
+            text = td.get_text(strip=True).upper()
+            if "DUE DATE" in text and i + 1 < len(all_tds):
+                due = all_tds[i + 1].get_text(strip=True)
+            if "BILL MONTH" in text and i + 1 < len(all_tds):
+                bill_month = all_tds[i + 1].get_text(strip=True)
+            if "PAYABLE" in text and i + 1 < len(all_tds):
+                amount = all_tds[i + 1].get_text(strip=True)
+
+        if amount == "N/A":
+            for tag in soup.find_all(["td", "div", "span", "th"]):
+                t = tag.get_text(strip=True)
+                if "payable" in t.lower() or "net payable" in t.lower():
+                    nxt = tag.find_next_sibling()
+                    if nxt:
+                        amount = nxt.get_text(strip=True)
+
+        print(f"[GEPCO] Bill Month: {bill_month}, Due: {due}, Amount: {amount}")
+        return {"amount": amount, "due_date": due, "bill_month": bill_month, "source": "GEPCO"}
+
     except Exception as e:
         print(f"[GEPCO] Error: {e}")
         return None
@@ -67,7 +83,6 @@ def check_gepco(ref_no):
 # SNGPL BILL FETCHER
 # ─────────────────────────────────────────
 def check_sngpl(consumer_no):
-    """Fetch latest SNGPL bill info."""
     try:
         url = "https://www.sngpl.com.pk/onlinebill.php"
         payload = {"consno": consumer_no}
@@ -75,13 +90,20 @@ def check_sngpl(consumer_no):
         resp = requests.post(url, data=payload, headers=headers, timeout=15)
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        amount_tag = soup.find("td", string=lambda t: t and "Payable" in t)
-        due_tag    = soup.find("td", string=lambda t: t and "Due Date" in t)
+        amount = "N/A"
+        due    = "N/A"
 
-        amount = amount_tag.find_next_sibling("td").text.strip() if amount_tag else "N/A"
-        due    = due_tag.find_next_sibling("td").text.strip()    if due_tag    else "N/A"
+        all_tds = soup.find_all("td")
+        for i, td in enumerate(all_tds):
+            text = td.get_text(strip=True).upper()
+            if "DUE DATE" in text and i + 1 < len(all_tds):
+                due = all_tds[i + 1].get_text(strip=True)
+            if "PAYABLE" in text and i + 1 < len(all_tds):
+                amount = all_tds[i + 1].get_text(strip=True)
 
+        print(f"[SNGPL] Due: {due}, Amount: {amount}")
         return {"amount": amount, "due_date": due, "source": "SNGPL"}
+
     except Exception as e:
         print(f"[SNGPL] Error: {e}")
         return None
@@ -96,9 +118,9 @@ Hello,
 
 A new utility bill has been issued:
 
-  Provider  : {bill['source']}
-  Amount    : PKR {bill['amount']}
-  Due Date  : {bill['due_date']}
+  Provider   : {bill['source']}
+  Amount     : PKR {bill['amount']}
+  Due Date   : {bill['due_date']}
 
 Please pay before the due date to avoid late surcharges.
 
@@ -113,7 +135,7 @@ Checked on: {datetime.now().strftime('%Y-%m-%d %H:%M')}
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(GMAIL_USER, GMAIL_PASSWORD)
         server.sendmail(GMAIL_USER, NOTIFY_EMAIL, msg.as_string())
-    print(f"[Email] Sent for {bill['source']}")
+    print(f"[Email] ✅ Sent for {bill['source']}")
 
 def send_whatsapp(bill):
     client = Client(TWILIO_SID, TWILIO_TOKEN)
@@ -124,7 +146,7 @@ def send_whatsapp(bill):
         f"Please pay before the due date! ✅"
     )
     client.messages.create(body=message, from_=TWILIO_FROM, to=WHATSAPP_TO)
-    print(f"[WhatsApp] Sent for {bill['source']}")
+    print(f"[WhatsApp] ✅ Sent for {bill['source']}")
 
 def notify(bill):
     try:
@@ -145,27 +167,29 @@ def main():
 
     print(f"[{datetime.now()}] Checking bills...")
 
-    # Check GEPCO
     if GEPCO_REF_NO:
         gepco = check_gepco(GEPCO_REF_NO)
-        if gepco and gepco["due_date"] != state.get("gepco"):
-            print(f"[GEPCO] New bill found! Due: {gepco['due_date']}, Amount: {gepco['amount']}")
+        if gepco and gepco["due_date"] != "N/A" and gepco["due_date"] != state.get("gepco"):
+            print(f"[GEPCO] New bill found!")
             notify(gepco)
             state["gepco"] = gepco["due_date"]
             changed = True
         else:
-            print("[GEPCO] No new bill.")
+            print("[GEPCO] No new bill or already notified.")
+    else:
+        print("[GEPCO] No reference number set, skipping.")
 
-    # Check SNGPL
     if SNGPL_REF_NO:
         sngpl = check_sngpl(SNGPL_REF_NO)
-        if sngpl and sngpl["due_date"] != state.get("sngpl"):
-            print(f"[SNGPL] New bill found! Due: {sngpl['due_date']}, Amount: {sngpl['amount']}")
+        if sngpl and sngpl["due_date"] != "N/A" and sngpl["due_date"] != state.get("sngpl"):
+            print(f"[SNGPL] New bill found!")
             notify(sngpl)
             state["sngpl"] = sngpl["due_date"]
             changed = True
         else:
-            print("[SNGPL] No new bill.")
+            print("[SNGPL] No new bill or already notified.")
+    else:
+        print("[SNGPL] No consumer number set, skipping.")
 
     if changed:
         save_state(state)
